@@ -964,18 +964,18 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
-    ## Always mount Prometheus /metrics endpoint if not already mounted.
-    ## The config-loading code in get_config() should mount it when success_callback
-    ## contains "prometheus", but due to timing issues it sometimes doesn't.
-    ## This is a safety net — mounting is idempotent and harmless.
+    ## Mount Prometheus /metrics endpoint unconditionally.
+    ## The config-loading path has a timing bug where _mount_metrics_endpoint()
+    ## is called but the route doesn't persist. Force it here after all config is loaded.
     try:
-        mounted = any(getattr(r, "path", "") == "/metrics" for r in app.routes)
-        if not mounted:
-            from litellm.integrations.prometheus import PrometheusLogger
-            PrometheusLogger._mount_metrics_endpoint()
-            verbose_proxy_logger.info("Prometheus /metrics endpoint mounted at startup (safety net)")
+        from prometheus_client import make_asgi_app
+        metrics_app = make_asgi_app()
+        app.mount("/metrics", metrics_app)
+        verbose_proxy_logger.info("Prometheus /metrics endpoint mounted at startup")
+    except ImportError:
+        verbose_proxy_logger.debug("prometheus_client not installed — /metrics not mounted")
     except Exception as e:
-        verbose_proxy_logger.debug(f"Prometheus metrics mount skipped: {e}")
+        verbose_proxy_logger.warning(f"Failed to mount /metrics: {e}")
 
     # End of startup event
     yield
